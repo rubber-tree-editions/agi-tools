@@ -1,0 +1,21 @@
+{
+  "name": "@rubber-tree-editions/agi-tools",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "repository": "https://github.com/rubber-tree-editions/agi-tools.git",
+  "author": "Duncan Cross <duncan.cross@gmail.com>",
+  "license": "MIT",
+  "private": false,
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "typescript": "^4.4.3"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@types/node": "^16.9.6"
+  }
+}
