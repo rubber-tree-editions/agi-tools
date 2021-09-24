@@ -90,7 +90,13 @@ interface LiteralExpression {
 
 interface Uint8Expression {
   type: 'uint8';
-  meaning: 'number' | 'variable' | 'flag' | 'variable-value' | 'controller' | 'inventory-item' | 'message' | 'room-object' | 'string' | 'word';
+  meaning: 'number' | 'variable' | 'flag' | 'variable-value' | 'controller' | 'inventory-item' | 'message' | 'room-object' | 'string';
+  value: number;
+}
+
+interface Uint16Expression {
+  type: 'uint16';
+  meaning: 'word';
   value: number;
 }
 
@@ -100,7 +106,7 @@ interface MathExpression {
   operands: [Expression, Expression];
 }
 
-type Expression = CallExpression | AndExpression | OrExpression | NotExpression | LiteralExpression | MathExpression | Uint8Expression;
+type Expression = CallExpression | AndExpression | OrExpression | NotExpression | LiteralExpression | MathExpression | Uint8Expression | Uint16Expression;
 
 interface CallStatement {
   type: 'call';
@@ -153,7 +159,7 @@ const flagTest = /^f(?:0|1[0-9]{0,2}|2(?:[0-4][0-9]|5[0-5]|[0-9])?|[3-9][0-9]?)$
 const anyValueTest = /^[vfmoiswc](?:0|1[0-9]{0,2}|2(?:[0-4][0-9]|5[0-5]|[0-9])?|[3-9][0-9]?)$/;
 const intTest = /^0[0-7]*|0x[a-f0-9]+|[1-9][0-9]*$/i;
 
-const VALTYPES_BY_PREFIX = {
+const UINT8TYPE_BY_PREFIX = {
   m: 'message',
   c: 'controller',
   v: 'variable',
@@ -161,9 +167,8 @@ const VALTYPES_BY_PREFIX = {
   i: 'inventory-item',
   o: 'room-object',
   s: 'string',
-  w: 'word',
 } as const;
-type prefix_t = keyof typeof VALTYPES_BY_PREFIX;
+type prefix_t = keyof typeof UINT8TYPE_BY_PREFIX;
 
 export async function loadDictionary(path: string) {
   const raw = await fs.promises.readFile(path, {encoding:'utf-8'});
@@ -695,7 +700,7 @@ export default async function compile({ path }: { path: string }) {
               throw new LineSyntaxError(line, `word not found in dictionary: ` + strLiteral);
             }
             params[param_i] = {
-              type: 'uint8',
+              type: 'uint16',
               meaning: 'word',
               value: dictionary.byWord.get(strLiteral)!,
             };
@@ -813,11 +818,20 @@ export default async function compile({ path }: { path: string }) {
     const { token, line } = requireToken();
     if (isKeywordToken(token)) {
       if (anyValueTest.test(token)) {
-        return {
-          type: 'uint8',
-          meaning: VALTYPES_BY_PREFIX[token[0] as prefix_t],
-          value: Number.parseInt(token.slice(1)),
-        };
+        if (token.startsWith('w')) {
+          return {
+            type: 'uint16',
+            meaning: 'word',
+            value: Number.parseInt(token.slice(1)),
+          };
+        }
+        else {
+          return {
+            type: 'uint8',
+            meaning: UINT8TYPE_BY_PREFIX[token[0] as prefix_t],
+            value: Number.parseInt(token.slice(1)),
+          };            
+        }
       }
       let func = token;
       if (tryToken('.')) {
@@ -844,9 +858,9 @@ export default async function compile({ path }: { path: string }) {
             if (!dictionary.byWord.has(word)) {
               throw new LineSyntaxError(line, 'word not found in dictionary: ' + word);
             }
-            return {type:'uint8', meaning:'word', value:dictionary.byWord.get(word)!};
+            return {type:'uint16', meaning:'word', value:dictionary.byWord.get(word)!};
           }
-          if (v.type === 'uint8' && v.meaning === 'word') {
+          if (v.type === 'uint16' && v.meaning === 'word') {
             return v;
           }
           throw new LineSyntaxError(line, 'parameters must be words');
@@ -936,4 +950,225 @@ export default async function compile({ path }: { path: string }) {
     statements.push({type:'call', func:'return', params:[]});
   }
   console.log(JSON.stringify(statements, null, 2));
+  const labelPos = new Map<string, number>();
+  const labelPromises = new Map<string, Promise<number>>();
+  const labelListeners = new Map<string, (n: number) => void>();
+  const buf = new Array<number>();
+  const complete = new Array<Promise<void>>();
+  const negateCondition = (expr: Expression): Expression => {
+    switch (expr.type) {
+      case 'and': {
+        return {
+          type: 'or',
+          operands: expr.operands.map(negateCondition),
+        };
+      }
+      case 'or': {
+        return {
+          type: 'and',
+          operands: expr.operands.map(negateCondition),
+        };
+      }
+      case 'not': {
+        return expr.operand;
+      }
+      default: {
+        return {
+          type: 'not',
+          operand: expr,
+        };
+      }
+    }
+  };
+  const pushCondition = (expr: Expression, ctx?: 'and' | 'or' | 'not') => {
+    switch (expr.type) {
+      case 'and': {
+        if (ctx !== 'and') {
+          buf.push(0xFF);
+        }
+        for (const subcondition of expr.operands) {
+          pushCondition(subcondition, 'and');
+        }
+        if (ctx !== 'and') {
+          buf.push(0xFF);
+        }
+        break;
+      }
+      case 'or': {
+        if (ctx !== 'or') {
+          buf.push(0xFC);
+        }
+        for (const subcondition of expr.operands) {
+          pushCondition(subcondition, 'or');
+        }
+        if (ctx !== 'or') {
+          buf.push(0xFC);
+        }
+        break;
+      }
+      case 'not': {
+        buf.push(0xFD);
+        pushCondition(expr.operand, 'not');
+        break;
+      }
+      case 'call': {
+        if (ctx == null) {
+          buf.push(0xFF);
+        }
+        const cmd = testCommandsByName.get(expr.func);
+        if (!cmd) {
+          throw new Error('unknown test command: ' + expr.func);
+        }
+        buf.push(cmd.code);
+        const params = expr.params;
+        if (cmd.params === 'vararg') {
+          if (expr.params.length > 255) {
+            throw new Error('too many arguments to '+cmd.name+'()');
+          }
+          buf.push(expr.params.length);
+        }
+        for (const param of params) {
+          switch (param.type) {
+            case 'uint8': {
+              buf.push(param.value);
+              break;
+            }
+            case 'uint16': {
+              buf.push(param.value & 0xff);
+              buf.push((param.value >> 8) & 0xff);
+              break;
+            }
+          }
+        }
+        if (ctx == null) {
+          buf.push(0xFF);
+        }
+        break;
+      }
+      default: {
+        throw new Error('unexpected condition type: ' + expr.type);
+      }
+    }
+  };
+  const pushStatement = (statement: Statement) => {
+    switch (statement.type) {
+      case 'block': {
+        for (const bodyStatement of statement.body) {
+          pushStatement(bodyStatement);
+        }
+        break;
+      }
+      case 'empty': {
+        break;
+      }
+      case 'goto': {
+        const basePos = buf.length + 3;
+        if (labelPos.has(statement.label)) {
+          const relPos = labelPos.get(statement.label)! - basePos;
+          buf.push(0xfe, relPos & 0xff, (relPos >> 8) & 0xff);
+        }
+        else if (labelPromises.has(statement.label)) {
+          complete.push(labelPromises.get(statement.label)!.then(n => {
+            const relPos = n - basePos;
+            buf[basePos-2] = relPos & 0xff;
+            buf[basePos-1] = (relPos >> 8) & 0xff;
+          }));
+          buf.push(0xfe, 0, 0);
+        }
+        else {
+          labelPromises.set(statement.label, new Promise((resolve, reject) => {
+            labelListeners.set(statement.label, (number) => {
+              labelPromises.delete(statement.label);
+              resolve(number);
+            });
+          }));
+        }
+        break;
+      }
+      case 'label': {
+        if (labelPos.has(statement.label)) {
+          throw new Error('multiple jump labels named '+statement.label);
+        }
+        labelPos.set(statement.label, buf.length);
+        const listener = labelListeners.get(statement.label);
+        if (listener) {
+          listener(buf.length);
+          labelListeners.delete(statement.label);
+        }
+        break;
+      }
+      case 'call': {
+        const cmd = actionCommandsByName.get(statement.func);
+        if (!cmd) {
+          throw new Error('unknown command: '+statement.func);
+        }
+        buf.push(cmd.code);
+        for (const param of statement.params) {
+          switch (param.type) {
+            case 'uint8': {
+              buf.push(param.value);
+              break;
+            }
+            case 'uint16': {
+              buf.push(param.value & 0xff);
+              buf.push((param.value >> 16) & 0xff);
+              break;
+            }
+            default: {
+              throw new Error('unexpected param type: '+param.type);
+            }
+          }
+        }
+        break;
+      }
+      case 'if': {
+        pushCondition(negateCondition(statement.condition));
+        buf.push(0, 0);
+        const jumpFrom1 = buf.length;
+        pushStatement(statement.thenDo);
+        if (statement.elseDo) {
+          buf.push(0xFE, 0, 0);
+          const jumpFrom2 = buf.length;
+          const relJump = buf.length - jumpFrom1;
+          buf[jumpFrom1-2] = relJump & 0xff;
+          buf[jumpFrom1-1] = (relJump >> 8) & 0xff;  
+          pushStatement(statement.elseDo);
+          const relJump2 = buf.length - jumpFrom2;
+          buf[jumpFrom2-2] = relJump2 & 0xff;
+          buf[jumpFrom2-1] = (relJump2 >> 8) & 0xff;
+        }
+        else {
+          const relJump = buf.length - jumpFrom1;
+          buf[jumpFrom1-2] = relJump & 0xff;
+          buf[jumpFrom1-1] = (relJump >> 8) & 0xff;
+        }
+        break;
+      }
+      case 'while': {
+        const backJumpPos = buf.length;
+        pushCondition(negateCondition(statement.condition));
+        buf.push(0, 0);
+        const jumpFrom = buf.length;
+        pushStatement(statement.doThis);
+        const relBackJump = backJumpPos - buf.length;
+        buf.push(0xfe, relBackJump & 0xff, (relBackJump >> 8) & 0xff);
+        const relJump2 = buf.length - jumpFrom;
+        buf[jumpFrom-2] = relJump2 & 0xff;
+        buf[jumpFrom-1] = (relJump2 >> 8) & 0xff;
+        break;
+      }
+      case 'do': {
+        const backJumpPos = buf.length;
+        pushStatement(statement.body);
+        pushCondition(statement.condition);
+        const relBackJump = backJumpPos - buf.length;
+        buf.push(relBackJump & 0xff, (relBackJump >> 8) & 0xff);
+        break;
+      }
+    }
+  };
+  for (const statement of statements) {
+    pushStatement(statement);
+  }
+  console.log(buf.map(v => v.toString(16).padStart(2, '0')).join(' '));
 }
