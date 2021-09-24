@@ -931,5 +931,9 @@ export default async function compile({ path }: { path: string }) {
     repeatToken = true;
     statements.push(readStatement());
   }
+  const lastStatement = statements[statements.length-1];
+  if (!(lastStatement && lastStatement.type === 'call' && lastStatement.func === 'return')) {
+    statements.push({type:'call', func:'return', params:[]});
+  }
   console.log(JSON.stringify(statements, null, 2));
 }
