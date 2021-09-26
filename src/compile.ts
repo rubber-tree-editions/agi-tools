@@ -955,21 +955,88 @@ export default async function compile({ path }: { path: string }) {
   const labelListeners = new Map<string, (n: number) => void>();
   const buf = new Array<number>();
   const complete = new Array<Promise<void>>();
-  const negateCondition = (expr: Expression): Expression => {
+  const negateCondition = (expr: Expression, context?: 'and' | 'or'): Expression => {
     switch (expr.type) {
       case 'and': {
         return {
           type: 'or',
-          operands: expr.operands.map(negateCondition),
+          operands: expr.operands.map(v => negateCondition(v, 'or')),
         };
       }
       case 'or': {
         return {
           type: 'and',
-          operands: expr.operands.map(negateCondition),
+          operands: expr.operands.map(v => negateCondition(v, 'and')),
         };
       }
       case 'not': {
+        // bytecode minimization: avoid ending up with (and not (...) and) if we
+        // could instead use (not (...)) with an equivalent negated subexpression
+        if (!context && expr.operand.type === 'call') {
+          if (expr.operand.func === 'equaln') {
+            const rhs = expr.operand.params[1] as Uint8Expression;
+            if (rhs.value === 0) {
+              return {
+                type: 'not',
+                operand: {
+                  type: 'call',
+                  func: 'greatern',
+                  params: expr.operand.params,
+                },
+              };
+            }
+            else if (rhs.value === 255) {
+              return {
+                type: 'not',
+                operand: {
+                  type: 'call',
+                  func: 'lessn',
+                  params: expr.operand.params,
+                },
+              };
+            }
+          }
+          else if (expr.operand.func === 'greatern') {
+            const rhs = expr.operand.params[1] as Uint8Expression;
+            if (rhs.value !== 255) {
+              return {
+                type: 'not',
+                operand: {
+                  type: 'call',
+                  func: 'lessn',
+                  params: [
+                    expr.operand.params[0],
+                    {
+                      type: 'uint8',
+                      meaning: rhs.meaning,
+                      value: rhs.value + 1,
+                    },
+                  ],
+                },
+              };
+            }
+          }
+          else if (expr.operand.func === 'lessn') {
+            const rhs = expr.operand.params[1] as Uint8Expression;
+            if (rhs.value !== 0) {
+              return {
+                type: 'not',
+                operand: {
+                  type: 'call',
+                  func: 'greatern',
+                  params: [
+                    expr.operand.params[0],
+                    {
+                      type: 'uint8',
+                      meaning: rhs.meaning,
+                      value: rhs.value - 1,
+                    },
+                  ],
+                },
+              };
+            }
+          }
+        }
         return expr.operand;
       }
       default: {
