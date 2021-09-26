@@ -1047,35 +1047,35 @@ export default async function compile({ path }: { path: string }) {
       }
     }
   };
-  const pushCondition = (expr: Expression, ctx?: 'and' | 'or' | 'not') => {
+  const pushCondition = (expr: Expression, ctx?: 'any-false' | 'any-true' | 'is-false') => {
     switch (expr.type) {
       case 'and': {
-        if (ctx !== 'and') {
+        if (ctx !== 'any-false') {
           buf.push(0xFF);
         }
         for (const subcondition of expr.operands) {
-          pushCondition(subcondition, 'and');
+          pushCondition(subcondition, 'any-false');
         }
-        if (ctx !== 'and') {
+        if (ctx !== 'any-false') {
           buf.push(0xFF);
         }
         break;
       }
       case 'or': {
-        if (ctx !== 'or') {
+        if (ctx !== 'any-true') {
           buf.push(0xFC);
         }
         for (const subcondition of expr.operands) {
-          pushCondition(subcondition, 'or');
+          pushCondition(negateCondition(subcondition, 'or'), 'any-true');
         }
-        if (ctx !== 'or') {
+        if (ctx !== 'any-true') {
           buf.push(0xFC);
         }
         break;
       }
       case 'not': {
         buf.push(0xFD);
-        pushCondition(expr.operand, 'not');
+        pushCondition(expr.operand, 'is-false');
         break;
       }
       case 'call': {
@@ -1189,7 +1189,7 @@ export default async function compile({ path }: { path: string }) {
         break;
       }
       case 'if': {
-        pushCondition(negateCondition(statement.condition));
+        pushCondition(statement.condition);
         buf.push(0, 0);
         const jumpFrom1 = buf.length;
         pushStatement(statement.thenDo);
