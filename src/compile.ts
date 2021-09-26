@@ -259,7 +259,7 @@ export default async function compile({ path }: { path: string }) {
   let ifStack = new Array<{ifLine:{lineNumber: number, fileName: string}, elseLine?:{lineNumber: number, fileName: string}}>();
   const messageNumbers = new Map<string, number>();
   const messages = new Array<string>();
-  let nextFreeMessageNumber = 0;
+  let nextFreeMessageNumber = 1;
   for (let line_i = 0; line_i < tokenLines.length; line_i++) {
     const line = tokenLines[line_i];
     if (line.tokens[0] === '#') {
@@ -949,7 +949,6 @@ export default async function compile({ path }: { path: string }) {
   if (!(lastStatement && lastStatement.type === 'call' && lastStatement.func === 'return')) {
     statements.push({type:'call', func:'return', params:[]});
   }
-  console.log(JSON.stringify(statements, null, 2));
   const labelPos = new Map<string, number>();
   const labelPromises = new Map<string, Promise<number>>();
   const labelListeners = new Map<string, (n: number) => void>();
@@ -1237,5 +1236,20 @@ export default async function compile({ path }: { path: string }) {
   for (const statement of statements) {
     pushStatement(statement);
   }
-  console.log(buf.map(v => v.toString(16).padStart(2, '0')).join(' '));
+  let messageBlockLen = 0;
+  const messageOffsets = new Array<number>();
+  for (let message of messages) {
+    if (message == null) {
+      messageOffsets.push(-1);
+    }
+    else {
+      messageOffsets.push(messageBlockLen);
+      messageBlockLen += message.length + 1;
+    }
+  }
+  return {
+    bytecode: Buffer.from(buf),
+    messageOffsets,
+    messageBlock: Buffer.from(messages.filter(v => v != null).join('\0') + '\0', 'binary'),
+  };
 }
