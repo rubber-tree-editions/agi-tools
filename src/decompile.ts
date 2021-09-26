@@ -75,7 +75,8 @@ export class DataStore {
     const messageCount = textBlock[0];
     const messageBlock = avisDurgan(Buffer.from(textBlock.subarray(3 + messageCount*2)));
     const messageOffsets = new Array<number>(1 + messageCount);
-    for (let i = 0; i < messageOffsets.length; i++) {
+    messageOffsets[0] = -1;
+    for (let i = 1; i < messageOffsets.length; i++) {
       const ptr = textBlock.readUInt16LE(1 + i*2);
       if (ptr === 0) {
         messageOffsets[i] = -1;
