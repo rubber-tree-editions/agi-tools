@@ -1046,41 +1046,38 @@ export default async function compile({ path }: { path: string }) {
       }
     }
   };
-  const pushCondition = (expr: Expression, ctx?: 'any-false' | 'any-true' | 'is-false') => {
+  const pushCondition2 = (expr: Expression, ctx: 'and' | 'or' | 'not') => {
     switch (expr.type) {
       case 'and': {
-        if (ctx !== 'any-false') {
+        if (ctx !== 'and') {
           buf.push(0xFF);
         }
         for (const subcondition of expr.operands) {
-          pushCondition(subcondition, 'any-false');
+          pushCondition2(subcondition, 'and');
         }
-        if (ctx !== 'any-false') {
+        if (ctx !== 'and') {
           buf.push(0xFF);
         }
         break;
       }
       case 'or': {
-        if (ctx !== 'any-true') {
+        if (ctx !== 'or') {
           buf.push(0xFC);
         }
         for (const subcondition of expr.operands) {
-          pushCondition(negateCondition(subcondition, 'or'), 'any-true');
+          pushCondition2(subcondition, 'or');
         }
-        if (ctx !== 'any-true') {
+        if (ctx !== 'or') {
           buf.push(0xFC);
         }
         break;
       }
       case 'not': {
         buf.push(0xFD);
-        pushCondition(expr.operand, 'is-false');
+        pushCondition2(expr.operand, 'not');
         break;
       }
       case 'call': {
-        if (ctx == null) {
-          buf.push(0xFF);
-        }
         const cmd = testCommandsByName.get(expr.func);
         if (!cmd) {
           throw new Error('unknown test command: ' + expr.func);
@@ -1106,15 +1103,17 @@ export default async function compile({ path }: { path: string }) {
             }
           }
         }
-        if (ctx == null) {
-          buf.push(0xFF);
-        }
         break;
       }
       default: {
         throw new Error('unexpected condition type: ' + expr.type);
       }
     }
+  };
+  const pushCondition = (expr: Expression) => {
+    buf.push(0xff);
+    pushCondition2(expr, 'and');
+    buf.push(0xff);
   };
   const pushStatement = (statement: Statement) => {
     switch (statement.type) {
@@ -1211,22 +1210,22 @@ export default async function compile({ path }: { path: string }) {
         break;
       }
       case 'while': {
-        const backJumpPos = buf.length;
-        pushCondition(negateCondition(statement.condition));
+        const backJumpTo = buf.length;
+        pushCondition(statement.condition);
         buf.push(0, 0);
-        const jumpFrom = buf.length;
+        const forewardJumpFrom = buf.length;
         pushStatement(statement.doThis);
-        const relBackJump = backJumpPos - buf.length;
+        const relBackJump = backJumpTo - (buf.length + 3);
         buf.push(0xfe, relBackJump & 0xff, (relBackJump >> 8) & 0xff);
-        const relJump2 = buf.length - jumpFrom;
-        buf[jumpFrom-2] = relJump2 & 0xff;
-        buf[jumpFrom-1] = (relJump2 >> 8) & 0xff;
+        const relJump2 = buf.length - forewardJumpFrom;
+        buf[forewardJumpFrom-2] = relJump2 & 0xff;
+        buf[forewardJumpFrom-1] = (relJump2 >> 8) & 0xff;
         break;
       }
       case 'do': {
         const backJumpPos = buf.length;
         pushStatement(statement.body);
-        pushCondition(statement.condition);
+        pushCondition(negateCondition(statement.condition));
         const relBackJump = backJumpPos - buf.length;
         buf.push(relBackJump & 0xff, (relBackJump >> 8) & 0xff);
         break;
