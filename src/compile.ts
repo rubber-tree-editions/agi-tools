@@ -1077,21 +1077,23 @@ export default async function compile({ path }: { path: string }) {
           const relPos = labelPos.get(statement.label)! - basePos;
           buf.push(0xfe, relPos & 0xff, (relPos >> 8) & 0xff);
         }
-        else if (labelPromises.has(statement.label)) {
-          complete.push(labelPromises.get(statement.label)!.then(n => {
+        else {
+          let promise = labelPromises.get(statement.label);
+          if (!promise) {
+            promise = new Promise((resolve, reject) => {
+              labelListeners.set(statement.label, (number) => {
+                labelPromises.delete(statement.label);
+                resolve(number);
+              });
+            });
+            labelPromises.set(statement.label, promise);
+          }
+          complete.push(promise.then(n => {
             const relPos = n - basePos;
             buf[basePos-2] = relPos & 0xff;
             buf[basePos-1] = (relPos >> 8) & 0xff;
           }));
           buf.push(0xfe, 0, 0);
-        }
-        else {
-          labelPromises.set(statement.label, new Promise((resolve, reject) => {
-            labelListeners.set(statement.label, (number) => {
-              labelPromises.delete(statement.label);
-              resolve(number);
-            });
-          }));
         }
         break;
       }
@@ -1180,6 +1182,11 @@ export default async function compile({ path }: { path: string }) {
   for (const statement of statements) {
     pushStatement(statement);
   }
+  const undefinedLabels = [...labelListeners.keys()];
+  if (undefinedLabels.length !== 0) {
+    throw new Error('label target(s) not found: ' + undefinedLabels.join(', '));
+  }
+  await Promise.all(complete);
   let messageBlockLen = 0;
   const messageOffsets = new Array<number>();
   for (let message of messages) {
