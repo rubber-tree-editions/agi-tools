@@ -1172,9 +1172,10 @@ export default async function compile({ path }: { path: string }) {
       case 'do': {
         const backJumpPos = buf.length;
         pushStatement(statement.body);
-        pushCondition(negateCondition(statement.condition));
-        const relBackJump = backJumpPos - buf.length;
-        buf.push(relBackJump & 0xff, (relBackJump >> 8) & 0xff);
+        pushCondition(statement.condition);
+        buf.push(0x03, 0x00);
+        const relBackJump = backJumpPos - (buf.length + 3);
+        buf.push(0xfe, relBackJump & 0xff, (relBackJump >> 8) & 0xff);
         break;
       }
     }
