@@ -789,12 +789,24 @@ export default async function compile({ path }: { path: string }) {
           if (negate) {
             comparator = NEGATE_COMPARATOR[comparator];
           }
-          const comparison: Expression = {
-            type: 'call',
-            func: ({ '==': 'equal', '>': 'greater', '<': 'less' })[comparator as '==' | '<' | '>'] + (right.meaning==='variable'?'v':'n'),
-            params: [left, right],
-          };
-          expression = negate ? { type: 'not', operand: comparison } : comparison;
+          if (!negate && comparator === '==' && right.meaning === 'number' && right.value === 0) {
+            expression = {
+              type: 'not',
+              operand: {
+                type: 'call',
+                func: 'greatern',
+                params: [left, right],
+              },
+            };
+          }
+          else {
+            const comparison: Expression = {
+              type: 'call',
+              func: ({ '==': 'equal', '>': 'greater', '<': 'less' })[comparator as '==' | '<' | '>'] + (right.meaning==='variable'?'v':'n'),
+              params: [left, right],
+            };
+            expression = negate ? { type: 'not', operand: comparison } : comparison;  
+          }
           break;
         }
         case '+': case '-': case '*': case '/': {
@@ -969,73 +981,6 @@ export default async function compile({ path }: { path: string }) {
         };
       }
       case 'not': {
-        // bytecode minimization: avoid ending up with (and not (...) and) if we
-        // could instead use (not (...)) with an equivalent negated subexpression
-        if (!context && expr.operand.type === 'call') {
-          if (expr.operand.func === 'equaln') {
-            const rhs = expr.operand.params[1] as Uint8Expression;
-            if (rhs.value === 0) {
-              return {
-                type: 'not',
-                operand: {
-                  type: 'call',
-                  func: 'greatern',
-                  params: expr.operand.params,
-                },
-              };
-            }
-            else if (rhs.value === 255) {
-              return {
-                type: 'not',
-                operand: {
-                  type: 'call',
-                  func: 'lessn',
-                  params: expr.operand.params,
-                },
-              };
-            }
-          }
-          else if (expr.operand.func === 'greatern') {
-            const rhs = expr.operand.params[1] as Uint8Expression;
-            if (rhs.value !== 255) {
-              return {
-                type: 'not',
-                operand: {
-                  type: 'call',
-                  func: 'lessn',
-                  params: [
-                    expr.operand.params[0],
-                    {
-                      type: 'uint8',
-                      meaning: rhs.meaning,
-                      value: rhs.value + 1,
-                    },
-                  ],
-                },
-              };
-            }
-          }
-          else if (expr.operand.func === 'lessn') {
-            const rhs = expr.operand.params[1] as Uint8Expression;
-            if (rhs.value !== 0) {
-              return {
-                type: 'not',
-                operand: {
-                  type: 'call',
-                  func: 'greatern',
-                  params: [
-                    expr.operand.params[0],
-                    {
-                      type: 'uint8',
-                      meaning: rhs.meaning,
-                      value: rhs.value - 1,
-                    },
-                  ],
-                },
-              };
-            }
-          }
-        }
         return expr.operand;
       }
       default: {
