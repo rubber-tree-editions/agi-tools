@@ -1114,6 +1114,26 @@ export default async function compile({ path }: { path: string }) {
         if (!cmd) {
           throw new Error('unknown command: '+statement.func);
         }
+        if (cmd.name === 'return') {
+          const basePos = buf.length + 3;
+          let promise = labelPromises.get('!return');
+          if (!promise) {
+            promise = new Promise((resolve, reject) => {
+              labelListeners.set('!return', (number) => {
+                labelPromises.delete('!return');
+                resolve(number);
+              });
+            });
+            labelPromises.set('!return', promise);
+          }
+          complete.push(promise.then(n => {
+            const relPos = n - basePos;
+            buf[basePos-2] = relPos & 0xff;
+            buf[basePos-1] = (relPos >> 8) & 0xff;
+          }));
+          buf.push(0xfe, 0, 0);
+          break;
+        }
         buf.push(cmd.code);
         for (const param of statement.params) {
           switch (param.type) {
@@ -1183,11 +1203,14 @@ export default async function compile({ path }: { path: string }) {
   for (const statement of statements) {
     pushStatement(statement);
   }
+  labelListeners.get('!return')!(buf.length-3);
+  labelListeners.delete('!return');
   const undefinedLabels = [...labelListeners.keys()];
   if (undefinedLabels.length !== 0) {
     throw new Error('label target(s) not found: ' + undefinedLabels.join(', '));
   }
   await Promise.all(complete);
+  buf.splice(-3, 3, 0);
   let messageBlockLen = 0;
   const messageOffsets = new Array<number>();
   for (let message of messages) {
