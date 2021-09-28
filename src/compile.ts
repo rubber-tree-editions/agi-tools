@@ -20,16 +20,44 @@ const tokenize = (src: string, path: string) => {
   src = src.replace(/\?\?[=\/'()!<>\-]/g, t => TRIGRAPHS[t as trigraph_t]);
   // line splicing
   src = src.replace(/\\(\r\n?|\n)/g, '');
-  // comments replaced
-  src = src.replace(/\/*[\s\S]*?\*\/|\/\/[^\r\n]*/g, ' ');
   // split to lines
   const lines = src.split(/\r\n?|\n/g);
   // tokenization
-  return lines.map((line, i) => ({
-    tokens: line.match(/[a-z_][a-z_0-9]*|\.?[0-9](?:[ep][\+\-]|[a-z0-9_\.])*|"(?:[^"\\]+|\\.)*"|'(?:[^'\\]+|\\.)*'|\+[\+=]|\-[\-=>]|<<=?|>>=?|<[%:]|[%:]>|%:(?=%:)?|[\*\/=!&|^<>]=|&&|\|\||::|\S/gi) || new Array<string>(),
-    lineNumber: i+1,
-    fileName: path,
-  }));
+  let inComment = false;
+  const tokenLines = lines.map((line, i) => {
+    const tokens = line.match(/[a-z_][a-z_0-9]*|\.?[0-9](?:[ep][\+\-]|[a-z0-9_\.])*|"(?:[^"\\]+|\\.)*"|'(?:[^'\\]+|\\.)*'|\+[\+=]|\-[\-=>]|<<=?|>>=?|<[%:]|[%:]>|%:(?=%:)?|\/[\*=\/]|\*[=\/]|[=!&|^<>]=|&&|\|\||::|\S/gi) || new Array<string>();
+    for (let token_i = 0; token_i < tokens.length; token_i++) {
+      if (inComment) {
+        if (tokens[token_i] === '*/') {
+          inComment = false;
+        }
+        tokens.splice(token_i, 1);
+        token_i--;
+      }
+      else if (tokens[token_i] === '/*') {
+        tokens.splice(token_i, 1);
+        token_i--;
+        inComment = true;
+      }
+      else if (tokens[token_i] === '*/') {
+        tokens.splice(token_i, 1, '*', '/');
+        token_i++;
+      }
+      else if (tokens[token_i] === '//') {
+        tokens.splice(token_i);
+        break;
+      }
+    }
+    return {
+      tokens,
+      lineNumber: i+1,
+      fileName: path,
+    };
+  });
+  if (inComment) {
+    throw new Error('unterminated comment');
+  }
+  return tokenLines;
 };
 
 class LineSyntaxError extends SyntaxError {
