@@ -888,6 +888,12 @@ export default async function compile({ path }: { path: string }) {
         requireToken(')');
       }
       if (!testCommandsByName.has(func)) {
+        if (func === '__OR__') {
+          return {
+            type: 'or',
+            operands: params,
+          };
+        }
         throw new LineSyntaxError(line, 'unknown function: '+func);
       }
       const testCommand = testCommandsByName.get(func)!;
