@@ -817,24 +817,12 @@ export default async function compile({ path }: { path: string }) {
           if (negate) {
             comparator = NEGATE_COMPARATOR[comparator];
           }
-          if (!negate && comparator === '==' && right.meaning === 'number' && right.value === 0) {
-            expression = {
-              type: 'not',
-              operand: {
-                type: 'call',
-                func: 'greatern',
-                params: [left, right],
-              },
-            };
-          }
-          else {
-            const comparison: Expression = {
-              type: 'call',
-              func: ({ '==': 'equal', '>': 'greater', '<': 'less' })[comparator as '==' | '<' | '>'] + (right.meaning==='variable'?'v':'n'),
-              params: [left, right],
-            };
-            expression = negate ? { type: 'not', operand: comparison } : comparison;  
-          }
+          const comparison: Expression = {
+            type: 'call',
+            func: ({ '==': 'equal', '>': 'greater', '<': 'less' })[comparator as '==' | '<' | '>'] + (right.meaning==='variable'?'v':'n'),
+            params: [left, right],
+          };
+          expression = negate ? { type: 'not', operand: comparison } : comparison;
           break;
         }
         case '+': case '-': case '*': case '/': {
