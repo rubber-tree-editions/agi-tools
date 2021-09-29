@@ -1222,7 +1222,6 @@ export default async function compile({ path }: { path: string }) {
     throw new Error('label target(s) not found: ' + undefinedLabels.join(', '));
   }
   await Promise.all(complete);
-  buf.splice(-3, 3, 0);
   let messageBlockLen = 0;
   const messageOffsets = new Array<number>();
   for (let message of messages) {
