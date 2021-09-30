@@ -25,15 +25,18 @@ export class DataStore {
   constructor(readonly rootPath: string) {
   }
   private volCache = new Map<number, Buffer>();
-  async getFile(i: number) {
+  async getFile(path: string) {
+    return fs.promises.readFile(osPath.join(this.rootPath, path));
+  }
+  async getDataFile(i: number) {
     const cached = this.volCache.get(i);
     if (cached) return cached;
-    const result = await fs.promises.readFile(osPath.join(this.rootPath, `vol.${i}`));
+    const result = await this.getFile(`vol.${i}`);
     this.volCache.set(i, result);
     return result;
   }
   async getResource({fileNumber, offset}: ResourceRef) {
-    const container = await this.getFile(fileNumber);
+    const container = await this.getDataFile(fileNumber);
     if (container.readUInt16BE(offset) !== 0x1234 || container[offset+2] !== fileNumber) {
       console.warn(`invalid (${fileNumber} ${offset}): `+ container.readUInt16BE(offset).toString(16));
     }
@@ -43,6 +46,47 @@ export class DataStore {
       throw new Error(`invalid: expected ${length}, got ${extracted.length} (${fileNumber} ${offset})`);
     }
     return container.subarray(offset + 5, offset + 5 + length);
+  }
+  async getObjectNames(unmask = false, recordLen = 4) {
+    const data = await this.getFile('object');
+    let items = [];
+    let pos = recordLen;
+    let stopPos = Infinity;
+    while ((pos+recordLen) <= stopPos) {
+      const offset = recordLen + data.readUInt16LE(pos);
+      stopPos = Math.min(stopPos, offset);
+      items.push(data.toString('binary', offset, data.indexOf(0, offset)));
+      pos += recordLen;
+    }
+    return items;
+  }
+  async getDictionary() {
+    const data = await this.getFile('words.tok');
+    let pos = data[1];
+    let lastWord = '';
+    let wordIds = new Map<string, number>();
+    let wordsById = new Map<number, string[]>();
+    while ((pos+4) <= data.length) {
+      let word = lastWord.slice(0, data[pos++]);
+      do {
+        word += String.fromCharCode(0x7f ^ (data[pos] & 0x7f));
+      } while (!(data[pos++] & 0x80) && pos < data.length);
+      if (pos >= data.length) break;
+      const wordNum = data.readUInt16BE(pos);
+      pos += 2;
+      lastWord = word;
+      wordIds.set(word, wordNum);
+      if (wordsById.has(wordNum)) {
+        wordsById.get(wordNum)!.push(word);
+      }
+      else {
+        wordsById.set(wordNum, [word]);
+      }
+    }
+    return {
+      wordIds,
+      wordsById,
+    };
   }
   private _logicDir?: Promise<Array<ResourceRef | null>>;
   private getLogicDir() {

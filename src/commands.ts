@@ -1,6 +1,8 @@
 
 export type param_t = 'variable' | 'flag' | 'number' | 'controller' | 'string' | 'inventory-item' | 'room-object' | 'message' | 'word';
 
+export const param_bytelength = (p: param_t) => (p === 'word') ? 2 : 1;
+
 export interface Command {
   name: string;
   code: number;
