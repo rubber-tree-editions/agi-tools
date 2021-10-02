@@ -275,19 +275,16 @@ const booleanify = (expr: Expression): Expression => {
   }
 };
 
-export default async function compile({ path }: { path: string }) {
-  const [ src, dictionary, items ] = await Promise.all([
-    fs.promises.readFile(path, {encoding:'utf-8'}),
-    loadDictionary(osPath.resolve(path, '../words.txt')),
-    loadItems(osPath.resolve(path, '../items.txt')),
-  ]);
+export default async function compile({ path, simpleMacros = new Map() }: { path: string, simpleMacros: Map<string, string[]> }) {
+  const src = await fs.promises.readFile(path, {encoding:'utf-8'});
   const tokenLines = tokenize(src, path);
   // directive handling
-  const simpleMacros = new Map<string, string[]>();
   let ifStack = new Array<{ifLine:{lineNumber: number, fileName: string}, elseLine?:{lineNumber: number, fileName: string}}>();
   const messageNumbers = new Map<string, number>();
   const messages = new Array<string>();
   let nextFreeMessageNumber = 1;
+  const itemNumbers = new Map<string, number>();
+  const wordNumbers = new Map<string, number>();
   for (let line_i = 0; line_i < tokenLines.length; line_i++) {
     const line = tokenLines[line_i];
     if (line.tokens[0] === '#') {
@@ -438,6 +435,39 @@ export default async function compile({ path }: { path: string }) {
           }
           messages.length = Math.max(messages.length, messageNumber+1);
           messages[messageNumber] = message;
+          line.tokens.length = 0;
+          break;
+        }
+        case 'word': {
+          const wordNumber = decodeIntegerLiteral(line.tokens[2]);
+          for (let token_i = 3; token_i < line.tokens.length; token_i += 2) {
+            if (isStringLiteralToken(line.tokens[token_i])) {
+              wordNumbers.set(decodeStringLiteral(line.tokens[token_i]), wordNumber);
+            }
+            else if (isKeywordToken(line.tokens[token_i]) || isNumberToken(line.tokens[token_i])) {
+              wordNumbers.set(line.tokens[token_i], wordNumber);
+            }
+            else {
+              throw new LineSyntaxError(line, "invalid #word directive");
+            }
+            if ((token_i+1) < line.tokens.length && line.tokens[token_i+1] !== ',') {
+              throw new LineSyntaxError(line, "invalid #word directive");
+            }
+          }
+          line.tokens.length = 0;
+          break;
+        }
+        case 'item': {
+          if (line.tokens.length !== 4) {
+            throw new LineSyntaxError(line, "invalid #item directive");
+          }
+          const itemNumber = decodeIntegerLiteral(line.tokens[2]);
+          if (isStringLiteralToken(line.tokens[3])) {
+            itemNumbers.set(decodeStringLiteral(line.tokens[3]), itemNumber);
+          }
+          else if (isKeywordToken(line.tokens[3]) || isNumberToken(line.tokens[3])) {
+            itemNumbers.set(line.tokens[3], itemNumber);
+          }
           line.tokens.length = 0;
           break;
         }
@@ -724,23 +754,23 @@ export default async function compile({ path }: { path: string }) {
             }
           }
           else if (commandParams[param_i] === 'word') {
-            if (!dictionary.byWord.has(strLiteral)) {
+            if (!wordNumbers.has(strLiteral)) {
               throw new LineSyntaxError(line, `word not found in dictionary: ` + strLiteral);
             }
             params[param_i] = {
               type: 'uint16',
               meaning: 'word',
-              value: dictionary.byWord.get(strLiteral)!,
+              value: wordNumbers.get(strLiteral)!,
             };
           }
           else if (commandParams[param_i] === 'inventory-item') {
-            if (!items.byName.has(strLiteral)) {
+            if (!itemNumbers.has(strLiteral)) {
               throw new LineSyntaxError(line, `unknown inventory item: ${strLiteral}`);
             }
             params[param_i] = {
               type: 'uint8',
               meaning: 'inventory-item',
-              value: items.byName.get(strLiteral)!,
+              value: itemNumbers.get(strLiteral)!,
             };
           }
           else {
@@ -889,10 +919,10 @@ export default async function compile({ path }: { path: string }) {
         params = params.map(v => {
           if (v.type === 'literal' && isStringLiteralToken(v.literal)) {
             const word = decodeStringLiteral(v.literal);
-            if (!dictionary.byWord.has(word)) {
+            if (!wordNumbers.has(word)) {
               throw new LineSyntaxError(line, 'word not found in dictionary: ' + word);
             }
-            return {type:'uint16', meaning:'word', value:dictionary.byWord.get(word)!};
+            return {type:'uint16', meaning:'word', value:wordNumbers.get(word)!};
           }
           if (v.type === 'uint16' && v.meaning === 'word') {
             return v;
