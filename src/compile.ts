@@ -522,7 +522,7 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
         }
         case 'ifdef': case 'ifndef': case 'if': {
           let conditionalTokens = line.tokens.splice(2);
-          if (line.tokens[1] !== 'if' ? conditionalTokens.length === 0 : conditionalTokens.length !== 1 && isKeywordToken(conditionalTokens[0])) {
+          if (line.tokens[1] === 'if' ? conditionalTokens.length === 0 : conditionalTokens.length !== 1 || !isKeywordToken(conditionalTokens[0])) {
             throw new LineSyntaxError(line, `invalid #${line.tokens[1]} directive`);
           }
           if (line.tokens[1] === 'ifdef') {
