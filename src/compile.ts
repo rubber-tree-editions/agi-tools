@@ -616,7 +616,7 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
                     ifStack[ifStack.length-1].elseLine = tokenLines[line_i];
                   }
                   else {
-                    ifStack[ifStack.length] = {ifLine:tokenLines[line_i]};
+                    ifStack[ifStack.length-1] = {ifLine:tokenLines[line_i]};
                   }
                   continue clearLines;
                 }
