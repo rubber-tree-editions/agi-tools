@@ -590,7 +590,6 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
           if (line.tokens[1] === 'else' ? line.tokens.length !== 2 : line.tokens.length < 3) {
             throw new LineSyntaxError(line, `invalid #${line.tokens[1]} directive`);
           }
-          line.tokens.length = 0;
           if (ifStack.length === 0 || ifStack[ifStack.length-1].elseLine) {
             throw new LineSyntaxError(line, `unmatched #${line.tokens[1]} directive`);
           }
@@ -600,6 +599,7 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
           else {
             ifStack[ifStack.length-1].elseLine = line;
           }
+          line.tokens.length = 0;
           const stackBase = ifStack.length;
           clearLines: for (;;) {
             if (++line_i === tokenLines.length) {
