@@ -558,7 +558,7 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
                     }
                     ifStack[ifStack.length-1] = {ifLine:tokenLines[line_i]};
                     if (ifStack.length === stackBase) {
-                      const exprTokens = tokenLines[line_i].tokens.slice(2);
+                      const exprTokens = removeTokens.slice(2);
                       if (parseDirectiveExpression(tokenLines[line_i], exprTokens)) {
                         break clearLines;
                       }
