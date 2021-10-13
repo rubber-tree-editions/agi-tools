@@ -72,6 +72,7 @@ class LineSyntaxError extends SyntaxError {
 
 const isStringLiteralToken = (s: string) => s[0] === '"';
 const isKeywordToken = (s?: string | null) => /^[a-z_]/i.test(s || '');
+const isCharLiteralToken = (s: string) => s[0] === "'";
 const isNumberToken = (s?: string) => /^\.?[0-9]/.test(s || '');
 
 const ESCAPES = {
@@ -88,6 +89,7 @@ const ESCAPES = {
 type escape_t = keyof typeof ESCAPES;
 
 const decodeStringLiteral = (s: string) => s.slice(1, -1).replace(/\\.|\[/g, esc => ESCAPES[esc as escape_t] || esc.slice(1));
+const decodeCharLiteral = (s: string) => s.slice(1, -1).replace(/\\.|\[/g, esc => ESCAPES[esc as escape_t] || esc.slice(1)).codePointAt(0) || 0;
 const decodeIntegerLiteral = (s: string) => /^0[0-9]+$/.test(s || '') ? Number.parseInt(s, 8) : /^[0-9]+|^0x[0-9a-f]+$/i.test(s) ? Number.parseInt(s || '') : NaN;
 
 interface CallExpression {
@@ -275,6 +277,33 @@ const booleanify = (expr: Expression): Expression => {
   }
 };
 
+class PushbackIterator<T> implements Iterator<T> {
+  constructor(wrap: Iterable<T>) {
+    this.wrap = wrap[Symbol.iterator]();
+  }
+  private wrap: Iterator<T>;
+  pushback = new Array<T>();
+  next() {
+    if (this.pushback.length !== 0) {
+      return {done:false, value:this.pushback.shift()!};
+    }
+    return this.wrap.next();
+  }
+}
+
+const OP_PRECEDENCE = new Map([
+  ['||', 0],
+  ['&&', 1],
+  ['|', 2],
+  ['^', 3],
+  ['&', 4],
+  ['==', 5], ['!=', 5],
+  ['<', 6], ['<=', 6], ['>', 6], ['>=', 6],
+  ['<<', 7], ['>>', 7],
+  ['+', 8], ['-', 8],
+  ['*', 9], ['/', 9], ['%', 9],
+]);
+
 export default async function compile({ path, simpleMacros = new Map() }: { path: string, simpleMacros: Map<string, string[]> }) {
   const src = await fs.promises.readFile(path, {encoding:'utf-8'});
   const tokenLines = tokenize(src, path);
@@ -285,6 +314,174 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
   let nextFreeMessageNumber = 1;
   const itemNumbers = new Map<string, number>();
   const wordNumbers = new Map<string, number>();
+  const parseDirectiveExpression = (line: { fileName: string, lineNumber: number }, tokens: Iterable<string>): number => {
+    const tokenReader = new PushbackIterator(tokens);
+    function readAtom(): number {
+      let step = tokenReader.next();
+      while (!step.done && isKeywordToken(step.value) && simpleMacros.has(step.value)) {
+        tokenReader.pushback.unshift(...simpleMacros.get(step.value)!);
+        step = tokenReader.next();
+      }
+      if (step.done) {
+        throw new LineSyntaxError(line, 'unexpected end of expression');
+      }
+      switch (step.value) {
+        case '(': {
+          const expr = readExpression();
+          step = tokenReader.next();
+          if (step.done) {
+            throw new LineSyntaxError(line, 'unexpected end of expression');
+          }
+          if (step.value !== ')') {
+            throw new LineSyntaxError(line, 'unexpected content');
+          }
+          return expr;
+        }
+        case '!': {
+          return readAtom() ? 0 : 1;
+        }
+        case '+': {
+          return +readAtom();
+        }
+        case '-': {
+          return -readAtom();
+        }
+        case '~': {
+          return ~readAtom();
+        }
+      }
+      if (isKeywordToken(step.value)) {
+        if (step.value === 'defined') {
+          step = tokenReader.next();
+          if (!step.done) {
+            if (step.value === '(') {
+              step = tokenReader.next();
+              if (step.done || !isKeywordToken(step.value)) {
+                throw new LineSyntaxError(line, "invalid content in defined()");
+              }
+              const isDefined = simpleMacros.has(step.value);
+              step = tokenReader.next();
+              if (step.done || step.value !== ')') {
+                throw new LineSyntaxError(line, "invalid content in defined()");
+              }
+              return isDefined ? 1 : 0;
+            }
+            else {
+              tokenReader.pushback.unshift(step.value);
+            }
+          }
+        }
+        return 0;
+      }
+      if (isNumberToken(step.value)) {
+        return +step.value | 0;
+      }
+      if (isCharLiteralToken(step.value)) {
+        return decodeCharLiteral(step.value);
+      }
+      throw new LineSyntaxError(line, "unexpected content in expression");
+    }
+    function extendExpression(expr: number, level = 0): number {
+      let step = tokenReader.next();
+      while (!step.done) {
+        const precedence = OP_PRECEDENCE.get(step.value);
+        if (typeof precedence !== 'number' || precedence < level) {
+          tokenReader.pushback.unshift(step.value);
+          break;
+        }
+        switch (step.value) {
+          case '==': {
+            expr = (expr === readExpression(precedence + 1)) ? 1 : 0;
+            break;
+          }
+          case '!=': {
+            expr = (expr !== readExpression(precedence + 1)) ? 1 : 0;
+            break;
+          }
+          case '>': {
+            expr = (expr > readExpression(precedence + 1)) ? 1 : 0;
+            break;
+          }
+          case '>=': {
+            expr = (expr >= readExpression(precedence + 1)) ? 1 : 0;
+            break;
+          }
+          case '<': {
+            expr = (expr < readExpression(precedence + 1)) ? 1 : 0;
+            break;
+          }
+          case '<=': {
+            expr = (expr <= readExpression(precedence + 1)) ? 1 : 0;
+            break;
+          }
+          case '+': {
+            expr = (expr + readExpression(precedence + 1)) | 0;
+            break;
+          }
+          case '-': {
+            expr = (expr - readExpression(precedence + 1)) | 0;
+            break;
+          }
+          case '*': {
+            expr = Math.imul(expr, readExpression(precedence + 1));
+            break;
+          }
+          case '/': {
+            expr = (expr / readExpression(precedence + 1)) | 0;
+            break;
+          }
+          case '%': {
+            expr = (expr % readExpression(precedence + 1)) | 0;
+            break;
+          }
+          case '^': {
+            expr ^= readExpression(precedence + 1);
+            break;
+          }
+          case '<<': {
+            expr <<= readExpression(precedence + 1);
+            break;
+          }
+          case '>>': {
+            expr >>= readExpression(precedence + 1);
+            break;
+          }
+          case '&': {
+            expr &= readExpression(precedence + 1);
+            break;
+          }
+          case '|': {
+            expr |= readExpression(precedence + 1);
+            break;
+          }
+          case '&&': {
+            const rhs = readExpression(precedence+1);
+            if (expr) {
+              expr = rhs;
+            }
+            break;
+          }
+          case '||': {
+            const rhs = readExpression(precedence+1);
+            if (!expr) {
+              expr = rhs;
+            }
+            break;
+          }
+        }
+        step = tokenReader.next();
+      }
+      return expr;
+    }
+    function readExpression(level = 0): number {
+      return extendExpression(readAtom(), level);
+    }
+    const expr = readExpression();
+    if (!tokenReader.next().done) {
+      throw new LineSyntaxError(line, 'unexpected content in expression');
+    }
+    return expr;
+  };
   for (let line_i = 0; line_i < tokenLines.length; line_i++) {
     const line = tokenLines[line_i];
     if (line.tokens[0] === '#') {
@@ -323,11 +520,18 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
           line.tokens.length = 0;
           break;
         }
-        case 'ifdef': case 'ifndef': {
-          if (line.tokens.length !== 3 || !isKeywordToken(line.tokens[2])) {
+        case 'ifdef': case 'ifndef': case 'if': {
+          let conditionalTokens = line.tokens.splice(2);
+          if (line.tokens[1] !== 'if' ? conditionalTokens.length === 0 : conditionalTokens.length !== 1 && isKeywordToken(conditionalTokens[0])) {
             throw new LineSyntaxError(line, `invalid #${line.tokens[1]} directive`);
           }
-          const conditional = line.tokens[1] === 'ifndef' ? !simpleMacros.has(line.tokens[2]) : simpleMacros.has(line.tokens[2]);
+          if (line.tokens[1] === 'ifdef') {
+            conditionalTokens = ['defined', '(', conditionalTokens[0], ')'];
+          }
+          else if (line.tokens[1] === 'ifndef') {
+            conditionalTokens = ['!', 'defined', '(', conditionalTokens[0], ')'];
+          }
+          const conditional = parseDirectiveExpression(line, conditionalTokens);
           ifStack.push({ifLine:line});
           if (!conditional) {
             const stackBase = ifStack.length;
@@ -345,6 +549,19 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
                     ifStack[ifStack.length-1].elseLine = tokenLines[line_i];
                     if (ifStack.length === stackBase) {
                       break clearLines;
+                    }
+                    continue clearLines;
+                  }
+                  case 'elif': {
+                    if (ifStack[ifStack.length-1].elseLine) {
+                      throw new LineSyntaxError(tokenLines[line_i], 'unmatched #elif directive');
+                    }
+                    ifStack[ifStack.length-1] = {ifLine:tokenLines[line_i]};
+                    if (ifStack.length === stackBase) {
+                      const exprTokens = tokenLines[line_i].tokens.slice(2);
+                      if (parseDirectiveExpression(tokenLines[line_i], exprTokens)) {
+                        break clearLines;
+                      }
                     }
                     continue clearLines;
                   }
@@ -369,15 +586,20 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
           line.tokens.length = 0;
           break;
         }
-        case 'else': {
-          if (line.tokens.length !== 2) {
-            throw new LineSyntaxError(line, `invalid #else directive`);
+        case 'else': case 'elif': {
+          if (line.tokens[1] === 'else' ? line.tokens.length !== 2 : line.tokens.length < 3) {
+            throw new LineSyntaxError(line, `invalid #${line.tokens[1]} directive`);
           }
           line.tokens.length = 0;
           if (ifStack.length === 0 || ifStack[ifStack.length-1].elseLine) {
-            throw new LineSyntaxError(line, 'unmatched #else directive');
+            throw new LineSyntaxError(line, `unmatched #${line.tokens[1]} directive`);
           }
-          ifStack[ifStack.length-1].elseLine = line;
+          if (line.tokens[1] === 'elif') {
+            ifStack[ifStack.length-1] = {ifLine:line};
+          }
+          else {
+            ifStack[ifStack.length-1].elseLine = line;
+          }
           const stackBase = ifStack.length;
           clearLines: for (;;) {
             if (++line_i === tokenLines.length) {
@@ -386,11 +608,16 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
             const removeTokens = tokenLines[line_i].tokens.splice(0);
             if (removeTokens[0] === '#') {
               switch (removeTokens[1]) {
-                case 'else': {
+                case 'else': case 'elif': {
                   if (ifStack[ifStack.length-1].elseLine) {
-                    throw new LineSyntaxError(tokenLines[line_i], 'unmatched #else directive');
+                    throw new LineSyntaxError(tokenLines[line_i], `unmatched #${removeTokens[1]} directive`);
                   }
-                  ifStack[ifStack.length-1].elseLine = tokenLines[line_i];
+                  if (removeTokens[1] === 'else') {
+                    ifStack[ifStack.length-1].elseLine = tokenLines[line_i];
+                  }
+                  else {
+                    ifStack[ifStack.length] = {ifLine:tokenLines[line_i]};
+                  }
                   continue clearLines;
                 }
                 case 'endif': {
@@ -785,14 +1012,6 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
       params,
     };
   }
-  const OP_PRECEDENCE = new Map([
-    ['||', 0],
-    ['&&', 1],
-    ['==', 2], ['!=', 2],
-    ['<', 3], ['<=', 3], ['>', 3], ['>=', 3],
-    ['+', 4], ['-', 4],
-    ['*', 5], ['/', 5],
-  ]);
   const SWAP_COMPARATOR = {
     '<': '>',
     '<=': '>=',
