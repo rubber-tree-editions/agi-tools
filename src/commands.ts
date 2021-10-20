@@ -204,7 +204,7 @@ const actionCommands: Command[] = [
   {code:0xA7, name:'div.n', params:['variable','number']},
   {code:0xA8, name:'div.v', params:['variable','variable']},
   {code:0xA9, name:'close.window'},
-  //{code:0xAA, name:'set.simple', params:['???']},
+  {code:0xAA, name:'set.simple', params:['number']}, // unknown what this does/the actual param type
   {code:0xAB, name:'push.script'},
   {code:0xAC, name:'pop.script'},
   {code:0xAD, name:'hold.key'},
