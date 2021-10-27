@@ -785,7 +785,16 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
         const condition = booleanify(readExpression());
         requireToken(')');
         const thenDo = readStatement();
-        return tryToken('else') ? {type:'if', condition, thenDo, elseDo:readStatement()} : {type:'if', condition, thenDo};
+        const elseDo = tryToken('else') ? readStatement() : null;
+        if (condition.type === 'uint8' && condition.meaning === 'number') {
+          if (condition.value === 0) {
+            return elseDo || {type:'empty'};
+          }
+          else {
+            return thenDo;
+          }
+        }
+        return elseDo ? {type:'if', condition, thenDo, elseDo} : {type:'if', condition, thenDo};
       }
       case 'while': {
         requireToken('(');
@@ -1045,6 +1054,38 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
           while (tryToken(op.token)) {
             operands.push(readExpression(precedence+1));
           }
+          if (op.token === '&&') {
+            for (let i = operands.length-1; i >= 0; i--) {
+              const op = operands[i];
+              if (op.type === 'uint8' && op.meaning === 'number') {
+                if (op.value === 0) {
+                  return op;
+                }
+                else {
+                  operands.splice(i, 1);
+                }
+              }
+            }
+            if (operands.length === 1) {
+              return operands[0];
+            }
+          }
+          else {
+            for (let i = operands.length-1; i >= 0; i--) {
+              const op = operands[i];
+              if (op.type === 'uint8' && op.meaning === 'number') {
+                if (op.value !== 0) {
+                  return op;
+                }
+                else {
+                  operands.splice(i, 1);
+                }
+              }
+            }
+            if (operands.length === 1) {
+              return operands[0];
+            }
+          }
           expression = {
             type: op.token === '||' ? 'or' : 'and',
             operands,
@@ -1059,27 +1100,65 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
             [left, right] = [right, left];
             comparator = SWAP_COMPARATOR[comparator];
           }
-          if (left.type !== 'uint8' || left.meaning !== 'variable' || right.type !== 'uint8' || !(right.meaning === 'variable' || right.meaning === 'number')) {
-            throw new LineSyntaxError(op.line, 'invalid comparator: can only compare variables to an integer literal or another variable');
+          if (left.type !== 'uint8' || right.type !== 'uint8' || !(
+            (left.meaning === 'variable' && (right.meaning === 'number' || right.meaning === 'variable'))
+            || (left.meaning === 'number' && right.meaning === 'number')
+          )) {
+            throw new LineSyntaxError(op.line, 'invalid comparator: can only compare variables and integer literals');
           }
-          let negate = comparator == '!=' || comparator == '<=' || comparator == '>=';
-          if (negate) {
-            comparator = NEGATE_COMPARATOR[comparator];
+          if (left.meaning === 'number') {
+            let result: boolean;
+            switch (comparator) {
+              case '==': result = left.value === right.value; break;
+              case '!=': result = left.value !== right.value; break;
+              case '<': result = left.value < right.value; break;
+              case '<=': result = left.value <= right.value; break;
+              case '>': result = left.value > right.value; break;
+              case '>=': result = left.value >= right.value; break;
+            }
+            expression = {
+              type: 'uint8',
+              meaning: 'number',
+              value: result ? 1 : 0,
+            };
           }
-          const comparison: Expression = {
-            type: 'call',
-            func: ({ '==': 'equal', '>': 'greater', '<': 'less' })[comparator as '==' | '<' | '>'] + (right.meaning==='variable'?'v':'n'),
-            params: [left, right],
-          };
-          expression = negate ? { type: 'not', operand: comparison } : comparison;
+          else {
+            let negate = comparator == '!=' || comparator == '<=' || comparator == '>=';
+            if (negate) {
+              comparator = NEGATE_COMPARATOR[comparator];
+            }
+            const comparison: Expression = {
+              type: 'call',
+              func: ({ '==': 'equal', '>': 'greater', '<': 'less' })[comparator as '==' | '<' | '>'] + (right.meaning==='variable'?'v':'n'),
+              params: [left, right],
+            };
+            expression = negate ? { type: 'not', operand: comparison } : comparison;
+          }
           break;
         }
         case '+': case '-': case '*': case '/': {
-          expression = {
-            type: 'math',
-            operator: op.token,
-            operands: [expression, readExpression(precedence+1)],
-          };
+          const rhs = readExpression(precedence+1);
+          if (expression.type === 'uint8' && expression.meaning === 'number' && rhs.type === 'uint8' && rhs.meaning === 'number') {
+            let result: number;
+            switch (op.token) {
+              case '+': result = (expression.value + rhs.value) & 0xff; break;
+              case '-': result = (expression.value - rhs.value) & 0xff; break;
+              case '*': result = Math.imul(expression.value, rhs.value) & 0xff; break;
+              case '/': result = Math.floor(expression.value / rhs.value); break;
+            }
+            expression = {
+              type: 'uint8',
+              meaning: 'number',
+              value: result,
+            };
+          }
+          else {
+            expression = {
+              type: 'math',
+              operator: op.token,
+              operands: [expression, rhs],
+            };
+          }
           break;
         }
         default: {
@@ -1180,9 +1259,17 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
       };
     }
     else if (token === '!') {
+      const operand = readAtomExpression();
+      if (operand.type === 'uint8' && operand.meaning === 'number') {
+        return {
+          type: 'uint8',
+          meaning: 'number',
+          value: operand.value === 0 ? 1 : 0,
+        };
+      }
       return {
         type: 'not',
-        operand: readAtomExpression(),
+        operand,
       };
     }
     else if (token === '+') {
