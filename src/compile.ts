@@ -1116,7 +1116,12 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
           func += '.' + requireToken(isKeywordToken).token;
         } while (tryToken('.'));
       }
-      requireToken('(');
+      if (!tryToken('(')) {
+        if (testCommandsByName.has(func)) {
+          throw new LineSyntaxError(line, 'invalid use of function ' + func + '()');
+        }
+        throw new LineSyntaxError(line, 'unknown value: ' + func);
+      }
       let params = new Array<Expression>();
       if (!tryToken(')')) {
         do {
