@@ -1,5 +1,6 @@
 
-import { isTypedArray } from "util/types";
+import util from "util";
+const { isTypedArray } = util.types;
 
 export const longestCommonSubarray = <T>(array1: ArrayLike<T>, array2: ArrayLike<T>): Array<[offset1: number, offset2: number, length: number]> => {
   if (array2.length > array1.length) {
