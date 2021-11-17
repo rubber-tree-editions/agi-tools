@@ -1048,7 +1048,7 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
     }
     let expression = baseExpression;
     do {
-      const precedence = OP_PRECEDENCE.get(op.token)!;
+      const precedence: number = OP_PRECEDENCE.get(op.token)!;
       if (precedence < level) {
         break;
       }
@@ -1070,8 +1070,9 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
                 }
               }
             }
-            if (operands.length === 1) {
-              return operands[0];
+            switch (operands.length) {
+              case 0: return {type:'uint8', meaning:'number', value:1};
+              case 1: return operands[0];
             }
           }
           else {
@@ -1086,8 +1087,9 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
                 }
               }
             }
-            if (operands.length === 1) {
-              return operands[0];
+            switch (operands.length) {
+              case 0: return {type:'uint8', meaning:'number', value:0};
+              case 1: return operands[0];
             }
           }
           expression = {
