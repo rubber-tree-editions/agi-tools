@@ -52,6 +52,7 @@ const tokenize = (src: string, path: string) => {
       tokens,
       lineNumber: i+1,
       fileName: path,
+      raw: line,
     };
   });
   if (inComment) {
@@ -508,6 +509,9 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
           simpleMacros.set(line.tokens[2], line.tokens.slice(3));
           line.tokens.length = 0;
           break;
+        }
+        case 'error': {
+          throw new LineSyntaxError(line, line.raw.replace(/^\s*#\s*error\s*/, ''));
         }
         case 'undef': {
           if (line.tokens.length !== 3 || !isKeywordToken(line.tokens[2])) {
