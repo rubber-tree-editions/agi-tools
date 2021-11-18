@@ -137,7 +137,14 @@ interface MathExpression {
   operands: [Expression, Expression];
 }
 
-type Expression = CallExpression | AndExpression | OrExpression | NotExpression | LiteralExpression | MathExpression | Uint8Expression | Uint16Expression;
+interface ConditionalExpression {
+  type: 'conditional';
+  condition: Expression;
+  thenValue: Expression;
+  elseValue: Expression;
+}
+
+type Expression = CallExpression | AndExpression | OrExpression | NotExpression | LiteralExpression | MathExpression | Uint8Expression | Uint16Expression | ConditionalExpression;
 
 interface CallStatement {
   type: 'call';
@@ -293,16 +300,17 @@ class PushbackIterator<T> implements Iterator<T> {
 }
 
 const OP_PRECEDENCE = new Map([
-  ['||', 0],
-  ['&&', 1],
-  ['|', 2],
-  ['^', 3],
-  ['&', 4],
-  ['==', 5], ['!=', 5],
-  ['<', 6], ['<=', 6], ['>', 6], ['>=', 6],
-  ['<<', 7], ['>>', 7],
-  ['+', 8], ['-', 8],
-  ['*', 9], ['/', 9], ['%', 9],
+  ['?', 0],
+  ['||', 1],
+  ['&&', 2],
+  ['|', 3],
+  ['^', 4],
+  ['&', 5],
+  ['==', 6], ['!=', 6],
+  ['<', 7], ['<=', 7], ['>', 7], ['>=', 7],
+  ['<<', 8], ['>>', 8],
+  ['+', 9], ['-', 9],
+  ['*', 10], ['/', 10], ['%', 10],
 ]);
 
 export default async function compile({ path, simpleMacros = new Map() }: { path: string, simpleMacros: Map<string, string[]> }) {
@@ -391,6 +399,19 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
           break;
         }
         switch (step.value) {
+          case '?': {
+            const thenValue = readExpression();
+            step = tokenReader.next();
+            if (step.done) {
+              throw new LineSyntaxError(line, 'unexpected end of expression');
+            }
+            if (step.value !== ':') {
+              throw new LineSyntaxError(line, 'unexpected content');
+            }
+            const elseValue = readExpression(precedence);
+            expr = expr ? thenValue : elseValue;
+            break;
+          }
           case '==': {
             expr = (expr === readExpression(precedence + 1)) ? 1 : 0;
             break;
@@ -483,6 +504,17 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
     }
     return expr;
   };
+  const pragmaHandlers = new Map<string, (args: string) => void>([
+    ['message', args => {
+
+    }],
+    ['item', args => {
+
+    }],
+    ['word', args => {
+
+    }],
+  ]);
   for (let line_i = 0; line_i < tokenLines.length; line_i++) {
     const line = tokenLines[line_i];
     if (line.tokens[0] === '#') {
@@ -512,6 +544,18 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
         }
         case 'error': {
           throw new LineSyntaxError(line, line.raw.replace(/^\s*#\s*error\s*/, ''));
+        }
+        case 'pragma': {
+          if (line.tokens.length < 3 || !isKeywordToken(line.tokens[2])) {
+            throw new LineSyntaxError(line, 'invalid #pragma directive');
+          }
+          const handler = pragmaHandlers.get(line.tokens[2]);
+          if (!handler) {
+            throw new LineSyntaxError(line, 'unknown #pragma: '+line.tokens[2]);
+          }
+          const content = line.raw.replace(/^\s*#\*pragma\s*[a-z_][a-z_0-9]*/, '');
+          handler(content);
+          break;
         }
         case 'undef': {
           if (line.tokens.length !== 3 || !isKeywordToken(line.tokens[2])) {
@@ -1053,6 +1097,23 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
         break;
       }
       switch (op.token) {
+        case '?': {
+          const thenExpr = readExpression();
+          requireToken(':');
+          const elseExpr = readExpression(precedence);
+          if (expression.type === 'uint8' && expression.meaning === 'number') {
+            expression = expression.value ? thenExpr : elseExpr;
+          }
+          else {
+            expression = {
+              type: 'conditional',
+              condition: expression,
+              thenValue: thenExpr,
+              elseValue: elseExpr,
+            };
+          }
+          break;
+        }
         case '||': case '&&': {
           const operands = new Array<Expression>(expression, readExpression(precedence+1));
           while (tryToken(op.token)) {
