@@ -806,7 +806,7 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
   const requireToken = (req?: string | RegExp | ((str: string) => boolean)) => {
     const step = t.next();
     if (step.done) {
-      throw new SyntaxError('unexpected end of input');
+      throw new LineSyntaxError(tokenLines[tokenLines.length-1], 'unexpected end of input');
     }
     if (typeof req === 'string') {
       if (step.value.token !== req) {
@@ -977,6 +977,32 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
         throw new LineSyntaxError(assignToken.line, 'invalid assignment');
       }
       throw new LineSyntaxError(requireToken().line, 'unexpected content');
+    }
+    if (flagTest.test(token)) {
+      requireToken('=');
+      const rhs = readExpression();
+      requireToken(';');
+      if (rhs.type === 'not' && rhs.operand.type === 'uint8' && rhs.operand.meaning === 'flag' && rhs.operand.value === +token.slice(1)) {
+        return {
+          type: 'call',
+          func: 'toggle',
+          params: [rhs.operand],
+        };
+      }
+      const flag: Expression = {type:'uint8', meaning:'flag', value:+token.slice(1)};
+      if (rhs.type === 'uint8' && rhs.meaning === 'number') {
+        return {
+          type: 'call',
+          func: rhs.value ? 'set' : 'reset',
+          params: [flag],
+        };
+      }
+      return {
+        type: 'if',
+        condition: rhs,
+        thenDo: {type:'call', func:'set', params:[flag]},
+        elseDo: {type:'call', func:'reset', params:[flag]},
+      };
     }
     if (!isKeywordToken(token)) {
       throw new LineSyntaxError(line, 'unexpected content');
