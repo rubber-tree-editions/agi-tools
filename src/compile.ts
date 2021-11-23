@@ -313,6 +313,166 @@ const OP_PRECEDENCE = new Map([
   ['*', 10], ['/', 10], ['%', 10],
 ]);
 
+// (a + (b ? 1 : 2)) => (b ? a + 1 : a + 2)
+function hoistConditionalExpression(expr: Expression): Expression {
+  switch (expr.type) {
+    case 'literal': case 'uint8': case 'uint16': {
+      return expr;
+    }
+    case 'conditional': {
+      const { condition, thenValue, elseValue } = expr;
+      const hoistedCondition = hoistConditionalExpression(condition);
+      const hoistedThen = hoistConditionalExpression(thenValue);
+      const hoistedElse = hoistConditionalExpression(elseValue);
+      if (condition !== hoistedCondition || hoistedThen !== thenValue || hoistedElse !== elseValue) {
+        return {type:'conditional', condition:hoistedCondition, thenValue:hoistedThen, elseValue:hoistedElse};
+      }
+      return expr;
+    }
+    case 'and': case 'or': {
+      for (let i = 0; i < expr.operands.length; i++) {
+        const hoisted = hoistConditionalExpression(expr.operands[i]);
+        if (hoisted.type === 'conditional') {
+          const thenOps = expr.operands.slice();
+          const elseOps = expr.operands.slice();
+          thenOps[i] = hoisted.thenValue;
+          elseOps[i] = hoisted.elseValue;
+          return {
+            type: 'conditional',
+            condition: hoisted.condition,
+            thenValue: hoistConditionalExpression({type:expr.type, operands:thenOps}),
+            elseValue: hoistConditionalExpression({type:expr.type, operands:elseOps}),
+          };
+        }
+      }
+      return expr;
+    }
+    case 'not': {
+      const hoisted = hoistConditionalExpression(expr.operand);
+      if (hoisted.type === 'conditional') {
+        return {
+          type: 'conditional',
+          condition: hoisted.condition,
+          thenValue: {type:'not', operand:hoisted.thenValue},
+          elseValue: {type:'not', operand:hoisted.elseValue},
+        };
+      }
+      return expr;
+    }
+    case 'call': {
+      for (let i = 0; i < expr.params.length; i++) {
+        const hoisted = hoistConditionalExpression(expr.params[i]);
+        if (hoisted.type === 'conditional') {
+          const thenParams = expr.params.slice();
+          const elseParams = expr.params.slice();
+          thenParams[i] = hoisted.thenValue;
+          elseParams[i] = hoisted.elseValue;
+          return {
+            type: 'conditional',
+            condition: hoisted.condition,
+            thenValue: hoistConditionalExpression({type:'call', func:expr.func, params:thenParams}),
+            elseValue: hoistConditionalExpression({type:'call', func:expr.func, params:elseParams}),
+          };
+        }
+      }
+      return expr;
+    }
+    case 'math': {
+      for (let i = 0; i < expr.operands.length; i++) {
+        const hoisted = hoistConditionalExpression(expr.operands[i]);
+        if (hoisted.type === 'conditional') {
+          const thenOps = expr.operands.slice() as [Expression, Expression];
+          const elseOps = expr.operands.slice() as [Expression, Expression];
+          thenOps[i] = hoisted.thenValue;
+          elseOps[i] = hoisted.elseValue;
+          return {
+            type: 'conditional',
+            condition: hoisted.condition,
+            thenValue: hoistConditionalExpression({type:'math', operator:expr.operator, operands:thenOps}),
+            elseValue: hoistConditionalExpression({type:'math', operator:expr.operator, operands:elseOps}),
+          };
+        }
+      }
+      return expr;
+    }
+  }
+}
+
+function hoistConditionalStatement(statement: Statement): Statement {
+  switch (statement.type) {
+    case 'block': {
+      for (let i = 0; i < statement.body.length; i++) {
+        const hoisted = hoistConditionalStatement(statement.body[i]);
+        if (hoisted !== statement.body[i]) {
+          const copy = statement.body.slice();
+          copy[i] = hoisted;
+          for (i++; i < copy.length; i++) {
+            copy[i] = hoistConditionalStatement(copy[i]);
+          }
+          return {type:'block', body:copy};
+        }
+      }
+      return statement;
+    }
+    case 'call': {
+      for (let i = 0; i < statement.params.length; i++) {
+        const hoisted = hoistConditionalExpression(statement.params[i]);
+        if (hoisted.type === 'conditional') {
+          const thenParams = statement.params.slice();
+          const elseParams = statement.params.slice();
+          thenParams[i] = hoisted.thenValue;
+          elseParams[i] = hoisted.elseValue;
+          return {
+            type: 'if',
+            condition: hoisted.condition,
+            thenDo: hoistConditionalStatement({type:'call', func:statement.func, params:thenParams}),
+            elseDo: hoistConditionalStatement({type:'call', func:statement.func, params:elseParams}),
+          };
+        }
+      }
+      return statement;
+    }
+    case 'empty': case 'goto': case 'label': {
+      return statement;
+    }
+    case 'if': {
+      const hoistedCondition = hoistConditionalExpression(statement.condition);
+      if (hoistedCondition.type === 'conditional') {
+        return {
+          type: 'if',
+          condition: hoistedCondition.condition,
+          thenDo: hoistConditionalStatement({
+            type: 'if',
+            condition: hoistedCondition.thenValue,
+            thenDo: statement.thenDo,
+            elseDo: statement.elseDo,
+          }),
+          elseDo: hoistConditionalStatement({
+            type: 'if',
+            condition: hoistedCondition.elseValue,
+            thenDo: statement.thenDo,
+            elseDo: statement.elseDo,
+          }),
+        };
+      }
+      const hoistedThen = hoistConditionalStatement(statement.thenDo);
+      const hoistedElse = statement.elseDo ? hoistConditionalStatement(statement.elseDo) : undefined;
+      if (hoistedThen !== statement.thenDo || hoistedElse !== statement.elseDo) {
+        return {type:'if', condition:statement.condition, thenDo:hoistedThen, elseDo:hoistedElse};
+      }
+      return statement;
+    }
+    case 'while': {
+      // TODO
+      return statement;
+    }
+    case 'do': {
+      // TODO
+      return statement;
+    }
+  }
+}
+
 export default async function compile({ path, simpleMacros = new Map() }: { path: string, simpleMacros: Map<string, string[]> }) {
   const src = await fs.promises.readFile(path, {encoding:'utf-8'});
   const tokenLines = tokenize(src, path);
