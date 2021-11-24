@@ -398,6 +398,76 @@ function hoistConditionalExpression(expr: Expression): Expression {
   }
 }
 
+const negateCondition = (expr: Expression): Expression => {
+  switch (expr.type) {
+    case 'and': {
+      return {
+        type: 'or',
+        operands: expr.operands.map(v => negateCondition(v)),
+      };
+    }
+    case 'or': {
+      return {
+        type: 'and',
+        operands: expr.operands.map(v => negateCondition(v)),
+      };
+    }
+    case 'not': {
+      return expr.operand;
+    }
+    case 'conditional': {
+      return {
+        type: 'conditional',
+        condition: expr.condition,
+        thenValue: negateCondition(expr.thenValue),
+        elseValue: negateCondition(expr.elseValue),
+      };
+    }
+    default: {
+      return {
+        type: 'not',
+        operand: expr,
+      };
+    }
+  }
+};
+
+function flattenHoistedConditional(expression: Expression): Expression {
+  if (expression.type === 'conditional') {
+    const condition = flattenHoistedConditional(expression.condition);
+    const thenValue = flattenHoistedConditional(expression.thenValue);
+    const elseValue = flattenHoistedConditional(expression.elseValue);
+    return {
+      type: 'or',
+      operands: [
+        {
+          type: 'and',
+          operands: [
+            condition,
+            ...(
+              thenValue.type === 'and'
+              ? thenValue.operands
+              : [thenValue]
+            ),
+          ],
+        },
+        {
+          type: 'and',
+          operands: [
+            negateCondition(condition),
+            ...(
+              elseValue.type === 'and'
+              ? elseValue.operands
+              : [elseValue]
+            ),
+          ],
+        },
+      ],
+    };
+  }
+  return expression;
+}
+
 function hoistConditionalStatement(statement: Statement): Statement {
   switch (statement.type) {
     case 'block': {
@@ -437,37 +507,52 @@ function hoistConditionalStatement(statement: Statement): Statement {
     }
     case 'if': {
       const hoistedCondition = hoistConditionalExpression(statement.condition);
-      if (hoistedCondition.type === 'conditional') {
-        return {
-          type: 'if',
-          condition: hoistedCondition.condition,
-          thenDo: hoistConditionalStatement({
-            type: 'if',
-            condition: hoistedCondition.thenValue,
-            thenDo: statement.thenDo,
-            elseDo: statement.elseDo,
-          }),
-          elseDo: hoistConditionalStatement({
-            type: 'if',
-            condition: hoistedCondition.elseValue,
-            thenDo: statement.thenDo,
-            elseDo: statement.elseDo,
-          }),
-        };
-      }
       const hoistedThen = hoistConditionalStatement(statement.thenDo);
       const hoistedElse = statement.elseDo ? hoistConditionalStatement(statement.elseDo) : undefined;
+      if (hoistedCondition.type === 'conditional') {
+        const flattenedCondition = flattenHoistedConditional(hoistedCondition);
+        return {
+          type: 'if',
+          condition: flattenedCondition,
+          thenDo: hoistedThen,
+          elseDo: hoistedElse,
+        };
+      }
       if (hoistedThen !== statement.thenDo || hoistedElse !== statement.elseDo) {
         return {type:'if', condition:statement.condition, thenDo:hoistedThen, elseDo:hoistedElse};
       }
       return statement;
     }
     case 'while': {
-      // TODO
+      const hoistedCondition = hoistConditionalExpression(statement.condition);
+      const hoistedBody = hoistConditionalStatement(statement.doThis);
+      if (hoistedCondition.type === 'conditional') {
+        const flattenedCondition = flattenHoistedConditional(hoistedCondition);
+        return {
+          type: 'while',
+          condition: flattenedCondition,
+          doThis: hoistedBody,
+        };
+      }
+      if (hoistedBody !== statement.doThis) {
+        return {type:'while', condition:statement.condition, doThis:hoistedBody};
+      }
       return statement;
     }
     case 'do': {
-      // TODO
+      const hoistedCondition = hoistConditionalExpression(statement.condition);
+      const hoistedBody = hoistConditionalStatement(statement.body);
+      if (hoistedCondition.type === 'conditional') {
+        const flattenedCondition = flattenHoistedConditional(hoistedCondition);
+        return {
+          type: 'do',
+          condition: flattenedCondition,
+          body: hoistedBody,
+        };
+      }
+      if (hoistedBody !== statement.body) {
+        return {type:'do', condition:statement.condition, body:hoistedBody};
+      }
       return statement;
     }
   }
@@ -1571,7 +1656,7 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
   const statements = new Array<Statement>();
   while (tryToken()) {
     repeatToken = true;
-    statements.push(readStatement());
+    statements.push(hoistConditionalStatement(readStatement()));
   }
   const lastStatement = statements[statements.length-1];
   if (!(lastStatement && lastStatement.type === 'call' && lastStatement.func === 'return')) {
@@ -1582,31 +1667,6 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
   const labelListeners = new Map<string, (n: number) => void>();
   const buf = new Array<number>();
   const complete = new Array<Promise<void>>();
-  const negateCondition = (expr: Expression, context?: 'and' | 'or'): Expression => {
-    switch (expr.type) {
-      case 'and': {
-        return {
-          type: 'or',
-          operands: expr.operands.map(v => negateCondition(v, 'or')),
-        };
-      }
-      case 'or': {
-        return {
-          type: 'and',
-          operands: expr.operands.map(v => negateCondition(v, 'and')),
-        };
-      }
-      case 'not': {
-        return expr.operand;
-      }
-      default: {
-        return {
-          type: 'not',
-          operand: expr,
-        };
-      }
-    }
-  };
   const pushCondition2 = (expr: Expression, ctx: 'and' | 'or' | 'not') => {
     switch (expr.type) {
       case 'and': {
