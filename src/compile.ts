@@ -563,8 +563,8 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
   const tokenLines = tokenize(src, path);
   // directive handling
   let ifStack = new Array<{ifLine:{lineNumber: number, fileName: string}, elseLine?:{lineNumber: number, fileName: string}}>();
-  const messageNumbers = new Map<string, number>([['', 0]]);
-  const messages = [''];
+  const messageNumbers = new Map<string, number>();
+  const messages: Array<string | null> = [null];
   let nextFreeMessageNumber = 1;
   const itemNumbers = new Map<string, number>();
   const wordNumbers = new Map<string, number>();
@@ -1879,5 +1879,6 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
     bytecode: Buffer.from(buf),
     messageOffsets,
     messageBlock: Buffer.from(messages.filter(v => v != null).join('\0') + '\0', 'binary'),
+    wordNumbers,
   };
 }
