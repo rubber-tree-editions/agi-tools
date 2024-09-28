@@ -5,7 +5,6 @@
   "repository": "https://github.com/rubber-tree-editions/agi-tools.git",
   "author": "Duncan Cross <duncan.cross@gmail.com>",
   "license": "MIT",
-  "private": false,
   "files": [
     "dist"
   ],
