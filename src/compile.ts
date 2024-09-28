@@ -1882,3 +1882,36 @@ export default async function compile({ path, simpleMacros = new Map() }: { path
     wordNumbers,
   };
 }
+
+export function compileDictionary(dict: Map<string, number>) {
+  const words = [...dict.keys()].sort();
+  const alphabetOffsets = Buffer.alloc(26 * 2);
+  const bufs: Buffer[] = [alphabetOffsets];
+  let pos = alphabetOffsets.length;
+  let lastWord = '';
+  for (let word_i = 0; word_i < words.length; word_i++) {
+    const word = words[word_i];
+    let shared = 0;
+    while (shared < word.length && shared < lastWord.length && word[shared] === lastWord[shared]) {
+      shared++;
+    }
+    if (shared === 0) {
+      const letter = word.slice(0,1).toLowerCase().charCodeAt(0) - 'a'.charCodeAt(0);
+      if (letter >= 0 && letter < 26) {
+        alphabetOffsets.writeUInt16BE(pos, letter*2);
+      }
+    }
+    const wordBuf = Buffer.alloc(1 + (word.length - shared) + 2);
+    wordBuf[0] = shared;
+    for (let i = 0; i < (word.length - shared); i++) {
+      wordBuf[1 + i] = word.charCodeAt(shared + i) ^ 0x7f;
+    }
+    wordBuf[wordBuf.length - 3] |= 0x80;
+    wordBuf.writeUInt16BE(dict.get(word)!, wordBuf.length - 2);
+    bufs.push(wordBuf);
+    pos += wordBuf.length;
+    lastWord = word;
+  }
+  bufs.push(Buffer.from([0]));
+  return Buffer.concat(bufs);
+}
